@@ -58,7 +58,7 @@
 
     <div class="card">
       <h3>Konfigurasi</h3>
-      <label>Pilih Tabel (schema public):</label>
+      <label>Pilih Tabel:</label>
       <select id="tableSelect"></select>
       <div id="metaInfo"></div>
     </div>
@@ -286,6 +286,7 @@
           .schema(TARGET_SCHEMA)
           .from('v_table_list')
           .select('table_name')
+          .in('table_name',['saldo_durian','settlement','deposit','balance_id'])
           .order('table_name');
 
         if (error) throw error;
@@ -485,3 +486,4 @@
   </script>
 </body>
 </html>
+
