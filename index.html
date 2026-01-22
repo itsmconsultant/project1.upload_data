@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Upload Excel</title>
+  <title>Upload Excel to Supabase</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
   <style>
@@ -27,7 +27,7 @@
     th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; }
     th { background: #f8f9fa; }
     .preview-wrapper { width: 100%; overflow-x: auto; }
-    #status { margin-top: 10px; padding: 10px; border-radius: 4px; font-size: 14px; }
+    #status { margin-top: 10px; padding: 10px; border-radius: 4px; font-size: 14px; min-height: 20px; }
     .status-info { background: #e2f0ff; color: #084298; border: 1px solid #b6d4fe; }
     .status-success { background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
     .status-error { background: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
@@ -38,7 +38,6 @@
 
   <h1 id="pageTitle" style="display:none;">Upload Excel</h1>
 
-  <!-- LOGIN -->
   <div id="loginSection" class="card" style="max-width:400px;margin:40px auto;">
     <h2>Login</h2>
     <label>Email</label>
@@ -49,7 +48,6 @@
     <div id="loginStatus" style="margin-top:8px;font-size:13px;color:#b00;"></div>
   </div>
 
-  <!-- APP -->
   <div id="appSection" style="display:none;">
     <div style="text-align:right;margin-bottom:10px;">
       <span id="userInfo" style="margin-right:10px;font-size:13px;color:#555;"></span>
@@ -92,18 +90,18 @@
 
   <script>
     // ========== KONFIGURASI ==========
-    const SUPABASE_URL = 'https://jyxbmligiunpchkfykjj.supabase.co';      // <-- GANTI
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5eGJtbGlnaXVucGNoa2Z5a2pqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU0ODU4MTksImV4cCI6MjA4MTA2MTgxOX0.82bKqOXPya8jqnp9grZcD9FJJ9kdRqWHXTfn39rryFs';         // <-- GANTI
-    const TARGET_SCHEMA = 'project1';                            // schema tabel & view
+    const SUPABASE_URL = 'https://jyxbmligiunpchkfykjj.supabase.co'; 
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5eGJtbGlnaXVucGNoa2Z5a2pqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU0ODU4MTksImV4cCI6MjA4MTA2MTgxOX0.82bKqOXPya8jqnp9grZcD9FJJ9kdRqWHXTfn39rryFs'; // <--- PASTIKAN KEY BENAR
+    const TARGET_SCHEMA = 'project1';
     // ================================
 
     let supabaseClient = null;
     let excelRows = [];
     let excelHeaders = [];
+    const tableColumnTypes = {};  
+    const tablePrimaryKeys = {}; 
 
-    // metadata tipe kolom
-    const tableColumnTypes = {};   // { tableName: { colName: 'date' | 'timestamp...' | 'other' } }
-
+    // --- UTILITY FUNCTIONS ---
     function setStatus(msg, type) {
       const statusDiv = document.getElementById('status');
       statusDiv.className = '';
@@ -115,140 +113,36 @@
     }
 
     function normalizeHeader(header, idx) {
-      return (header || `col_${idx}`)
-        .toString()
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, '_');
+      return (header || `col_${idx}`).toString().trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
     }
 
     function formatTwo(n) { return String(n).padStart(2, '0'); }
 
     function toPgDate(value) {
       if (value == null || value === '') return null;
-
-      // Serial Excel numeric
       if (typeof value === 'number') {
         const obj = XLSX.SSF.parse_date_code(value);
-        if (!obj) return null;
-        const y = obj.y;
-        const m = formatTwo(obj.m);
-        const d = formatTwo(obj.d);
-        return `${y}-${m}-${d}`;
+        return obj ? `${obj.y}-${formatTwo(obj.m)}-${formatTwo(obj.d)}` : null;
       }
-
-      // Date object
-      if (value instanceof Date) {
-        const y = value.getFullYear();
-        const m = formatTwo(value.getMonth() + 1);
-        const d = formatTwo(value.getDate());
-        return `${y}-${m}-${d}`;
-      }
-
-      // String: kalau sudah YYYY-MM-DD, pakai langsung
-      const s = String(value).trim();
-      if (!s) return null;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-      const dObj = new Date(s);
-      if (isNaN(dObj.getTime())) return null;
-      const y = dObj.getFullYear();
-      const m = formatTwo(dObj.getMonth() + 1);
-      const d = formatTwo(dObj.getDate());
-      return `${y}-${m}-${d}`;
+      const dObj = new Date(value);
+      return isNaN(dObj.getTime()) ? null : `${dObj.getFullYear()}-${formatTwo(dObj.getMonth()+1)}-${formatTwo(dObj.getDate())}`;
     }
 
-    // versi pakai parse_date_code, tidak ada geser tanggal/jam
     function toPgTimestamp(value) {
       if (value == null || value === '') return null;
-
-      // Serial Excel numeric
       if (typeof value === 'number') {
         const obj = XLSX.SSF.parse_date_code(value);
-        if (!obj) return null;
-        const y = obj.y;
-        const mo = formatTwo(obj.m);
-        const da = formatTwo(obj.d);
-        const h  = formatTwo(obj.H);
-        const mi = formatTwo(obj.M);
-        const se = formatTwo(Math.round(obj.S));
-        return `${y}-${mo}-${da} ${h}:${mi}:${se}`;
+        return obj ? `${obj.y}-${formatTwo(obj.m)}-${formatTwo(obj.d)} ${formatTwo(obj.H)}:${formatTwo(obj.M)}:${formatTwo(Math.round(obj.S))}` : null;
       }
-
-      // Date object
-      if (value instanceof Date) {
-        const y  = value.getFullYear();
-        const mo = formatTwo(value.getMonth() + 1);
-        const da = formatTwo(value.getDate());
-        const h  = formatTwo(value.getHours());
-        const mi = formatTwo(value.getMinutes());
-        const se = formatTwo(value.getSeconds());
-        return `${y}-${mo}-${da} ${h}:${mi}:${se}`;
-      }
-
-      // String: kirim apa adanya
-      const s = String(value).trim();
-      if (!s) return null;
-      return s;
+      return String(value).trim() || null;
     }
 
-    function showLogin() {
-      document.getElementById('pageTitle').style.display = 'none';
-      document.getElementById('loginSection').style.display = 'block';
-      document.getElementById('appSection').style.display = 'none';
-    }
-
-    function showApp(user) {
-      document.getElementById('pageTitle').style.display = 'block';
-      document.getElementById('loginSection').style.display = 'none';
-      document.getElementById('appSection').style.display = 'block';
-      document.getElementById('userInfo').textContent =
-        user?.email ? `Login sebagai: ${user.email}` : '';
-      initUploadUI();
-    }
-
-    async function initUploadUI() {
-      await loadTables();
-      const tableSelect = document.getElementById('tableSelect');
-      if (tableSelect.value) await loadColumnTypes(tableSelect.value);
-
-      tableSelect.addEventListener('change', () => loadColumnTypes(tableSelect.value));
-
-      const uploadArea = document.getElementById('uploadArea');
-      const fileInput = document.getElementById('fileInput');
-
-      uploadArea.addEventListener('click', () => fileInput.click());
-      fileInput.addEventListener('change', handleFile);
-
-      ['dragover','dragenter'].forEach(evt => {
-        uploadArea.addEventListener(evt, e => {
-          e.preventDefault();
-          uploadArea.classList.add('dragover');
-        });
-      });
-      ['dragleave','drop'].forEach(evt => {
-        uploadArea.addEventListener(evt, e => {
-          e.preventDefault();
-          uploadArea.classList.remove('dragover');
-        });
-      });
-      uploadArea.addEventListener('drop', e => {
-        handleFile({ target: { files: e.dataTransfer.files } });
-      });
-
-      document.getElementById('btnUpload').addEventListener('click', uploadToSupabase);
-      document.getElementById('btnReset').addEventListener('click', () => location.reload());
-    }
-
+    // --- AUTH LOGIC ---
     window.addEventListener('DOMContentLoaded', async () => {
       supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
       const { data: { session } } = await supabaseClient.auth.getSession();
-      if (session?.user) {
-        showApp(session.user);
-      } else {
-        showLogin();
-      }
+      if (session?.user) showApp(session.user);
+      else showLogin();
 
       document.getElementById('btnLogin').addEventListener('click', doLogin);
       document.getElementById('btnLogout').addEventListener('click', doLogout);
@@ -257,233 +151,165 @@
     async function doLogin() {
       const email = document.getElementById('loginEmail').value.trim();
       const password = document.getElementById('loginPassword').value;
-      const status = document.getElementById('loginStatus');
-
-      status.textContent = 'Logging in...';
-
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      if (error) {
-        status.textContent = 'Error: ' + error.message;
-        return;
-      }
-      status.textContent = '';
+      if (error) { document.getElementById('loginStatus').textContent = error.message; return; }
       showApp(data.user);
     }
 
-    async function doLogout() {
-      await supabaseClient.auth.signOut();
-      location.reload();
+    async function doLogout() { await supabaseClient.auth.signOut(); location.reload(); }
+
+    function showLogin() {
+      document.getElementById('loginSection').style.display = 'block';
+      document.getElementById('appSection').style.display = 'none';
+    }
+
+    function showApp(user) {
+      document.getElementById('pageTitle').style.display = 'block';
+      document.getElementById('loginSection').style.display = 'none';
+      document.getElementById('appSection').style.display = 'block';
+      document.getElementById('userInfo').textContent = `Login: ${user.email}`;
+      initUploadUI();
+    }
+
+    // --- CORE LOGIC ---
+    async function initUploadUI() {
+      await loadTables();
+      const tableSelect = document.getElementById('tableSelect');
+      tableSelect.addEventListener('change', () => loadColumnTypes(tableSelect.value));
+      
+      const fileInput = document.getElementById('fileInput');
+      const uploadArea = document.getElementById('uploadArea');
+      uploadArea.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', handleFile);
+      
+      document.getElementById('btnUpload').addEventListener('click', uploadToSupabase);
+      document.getElementById('btnReset').addEventListener('click', () => location.reload());
     }
 
     async function loadTables() {
       const tableSelect = document.getElementById('tableSelect');
-      const metaInfo = document.getElementById('metaInfo');
-      tableSelect.innerHTML = '';
-      metaInfo.textContent = 'Mengambil daftar tabel...';
-
       try {
         const { data, error } = await supabaseClient
           .schema(TARGET_SCHEMA)
           .from('v_table_list')
           .select('table_name')
-          .in('table_name',['saldo_durian','settlement','deposit','balance_id'])
+          .in('table_name', ['saldo_durian', 'settlement', 'deposit', 'disbursement'])
           .order('table_name');
 
         if (error) throw error;
-
-        if (!data || data.length === 0) {
-          metaInfo.textContent = 'Tidak ada tabel.';
-          return;
-        }
-
         data.forEach(row => {
           const opt = document.createElement('option');
           opt.value = row.table_name;
           opt.textContent = row.table_name;
           tableSelect.appendChild(opt);
         });
-
-        metaInfo.textContent =
-          'Tabel terdeteksi: ' + data.map(r => r.table_name).join(', ');
-      } catch (e) {
-        setStatus('Gagal membaca daftar tabel: ' + e.message, 'error');
-        metaInfo.textContent = '';
-      }
+        if (tableSelect.value) loadColumnTypes(tableSelect.value);
+      } catch (e) { setStatus('Gagal load tabel: ' + e.message, 'error'); }
     }
 
     async function loadColumnTypes(tableName) {
       const metaInfo = document.getElementById('metaInfo');
-      if (!tableName || !supabaseClient) return;
-
-      setStatus(`Mengambil metadata kolom untuk ${tableName}...`, 'info');
-
+      setStatus(`Mengambil metadata ${tableName}...`, 'info');
       try {
-        const { data, error } = await supabaseClient
-          .schema(TARGET_SCHEMA)
-          .from('v_date_columns')
-          .select('column_name, data_type')
-          .eq('table_name', tableName);
-
-        if (error) throw error;
-
+        // Ambil tipe kolom
+        const { data: cols } = await supabaseClient.schema(TARGET_SCHEMA).from('v_date_columns').select('column_name, data_type').eq('table_name', tableName);
         const colMap = {};
-        const dateCols = [];
-        const tsCols = [];
-
-        (data || []).forEach(c => {
-          const name = c.column_name.toLowerCase();
-          colMap[name] = c.data_type;
-          if (c.data_type === 'date') dateCols.push(name);
-          else tsCols.push(name);
-        });
-
+        (cols || []).forEach(c => colMap[c.column_name.toLowerCase()] = c.data_type);
         tableColumnTypes[tableName] = colMap;
 
-        setStatus(`Metadata ${tableName} OK.`, 'success');
-        metaInfo.textContent =
-          `Tabel: ${tableName} | Kolom date: ${dateCols.join(', ') || '-'} | Kolom timestamp: ${tsCols.join(', ') || '-'}`;
-      } catch (e) {
-        tableColumnTypes[tableName] = {};
-        setStatus('Gagal membaca metadata kolom: ' + e.message, 'error');
-      }
+        // Ambil Primary Key
+        const { data: pkData } = await supabaseClient.schema(TARGET_SCHEMA).from('v_primary_keys').select('pk_column').eq('table_name', tableName).maybeSingle();
+        tablePrimaryKeys[tableName] = pkData ? pkData.pk_column : 'id_internal';
+
+        metaInfo.textContent = `Tabel: ${tableName} | PK: ${tablePrimaryKeys[tableName]}`;
+        setStatus(`Metadata OK.`, 'success');
+      } catch (e) { setStatus('Gagal load metadata.', 'error'); }
     }
 
     async function handleFile(e) {
       const file = e.target.files[0];
       if (!file) return;
-
-      document.getElementById('fileInfo').textContent =
-        `File: ${file.name} (${Math.round(file.size/1024)} KB)`;
-      setStatus('Membaca file Excel...', 'info');
-
       const reader = new FileReader();
       reader.onload = evt => {
-        try {
-          const data = new Uint8Array(evt.target.result);
-          const wb = XLSX.read(data, { type: 'array' });
-          const sheet = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
-
-          if (!rows || rows.length === 0) {
-            setStatus('Sheet kosong.', 'error');
-            return;
-          }
-
-          excelHeaders = rows[0];
-          excelRows = rows.slice(1);
-
-          renderPreview();
-          setStatus(`File terbaca. ${excelRows.length} baris data.`, 'success');
-        } catch (err) {
-          setStatus('Error membaca file: ' + err.message, 'error');
-        }
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, blankrows: false });
+        excelHeaders = rows[0];
+        excelRows = rows.slice(1);
+        renderPreview();
+        setStatus(`File terbaca: ${excelRows.length} baris.`, 'success');
       };
       reader.readAsArrayBuffer(file);
     }
 
     function renderPreview() {
-      const previewSection = document.getElementById('previewSection');
       const previewTableDiv = document.getElementById('previewTable');
-      previewSection.style.display = 'block';
-
-      const tableName = document.getElementById('tableSelect').value || '';
-      const colTypes = tableColumnTypes[tableName] || {};
-
+      document.getElementById('previewSection').style.display = 'block';
+      const colTypes = tableColumnTypes[document.getElementById('tableSelect').value] || {};
       let html = '<div class="preview-wrapper"><table><thead><tr>';
-      excelHeaders.forEach((h, i) => {
-        html += `<th>${h || 'Col' + i}</th>`;
-      });
+      excelHeaders.forEach(h => html += `<th>${h}</th>`);
       html += '</tr></thead><tbody>';
-
       excelRows.slice(0, 10).forEach(row => {
         html += '<tr>';
-        excelHeaders.forEach((header, idx) => {
-          const colName = normalizeHeader(header, idx);
-          const type = colTypes[colName] || 'other';
-          let val = row[idx];
-
-          if (type === 'date') {
-            const converted = toPgDate(val);
-            val = converted || val;
-          } else if (type.startsWith('timestamp')) {
-            const converted = toPgTimestamp(val);
-            val = converted || val;
-          }
-
-          if (val == null) val = '';
-          html += `<td>${val}</td>`;
+        excelHeaders.forEach((h, i) => {
+          const type = colTypes[normalizeHeader(h, i)] || 'other';
+          let val = row[i];
+          if (type === 'date') val = toPgDate(val) || val;
+          else if (type.startsWith('timestamp')) val = toPgTimestamp(val) || val;
+          html += `<td>${val ?? ''}</td>`;
         });
         html += '</tr>';
       });
-      html += '</tbody></table></div>';
-
-      previewTableDiv.innerHTML = html;
+      previewTableDiv.innerHTML = html + '</tbody></table></div>';
     }
 
     async function uploadToSupabase() {
       const tableName = document.getElementById('tableSelect').value;
-      if (!tableName) {
-        setStatus('Pilih tabel tujuan terlebih dahulu.', 'error');
-        return;
-      }
-      if (!excelRows.length) {
-        setStatus('Tidak ada data untuk diupload.', 'error');
-        return;
-      }
-
-      const progressSection = document.getElementById('progressSection');
-      const progressText = document.getElementById('progressText');
-      const progressBar = document.getElementById('progressBar');
-
-      progressSection.style.display = 'block';
-      setStatus(`Mulai upload ke tabel "${tableName}"...`, 'info');
-
+      const pkName = tablePrimaryKeys[tableName] || 'id_internal';
+      const total = excelRows.length;
       const BATCH_SIZE = 100;
       let processed = 0;
-      const total = excelRows.length;
+      let insertedIds = [];
 
-      const colTypes = tableColumnTypes[tableName] || {};
+      document.getElementById('progressSection').style.display = 'block';
+      const progressBar = document.getElementById('progressBar');
+      const progressText = document.getElementById('progressText');
 
       try {
         for (let i = 0; i < total; i += BATCH_SIZE) {
           const batchRows = excelRows.slice(i, i + BATCH_SIZE);
-
           const payload = batchRows.map(row => {
             const obj = {};
             excelHeaders.forEach((header, idx) => {
               const colName = normalizeHeader(header, idx);
-              const type = colTypes[colName] || 'other';
-              let value = (row[idx] === undefined ? null : row[idx]);
-
-              if (type === 'date') {
-                value = toPgDate(value);
-              } else if (type.startsWith('timestamp')) {
-                value = toPgTimestamp(value);
-              }
-
-              obj[colName] = value;
+              if (colName === pkName) return; // Database isi otomatis
+              const type = (tableColumnTypes[tableName] || {})[colName] || 'other';
+              let val = row[idx] === undefined ? null : row[idx];
+              if (type === 'date') val = toPgDate(val);
+              else if (type.startsWith('timestamp')) val = toPgTimestamp(val);
+              obj[colName] = val;
             });
             return obj;
           });
 
-          const { error } = await supabaseClient
-            .schema(TARGET_SCHEMA)
-            .from(tableName)
-            .insert(payload);
-
+          const { data, error } = await supabaseClient.schema(TARGET_SCHEMA).from(tableName).insert(payload).select(pkName);
           if (error) throw error;
+          if (data) insertedIds.push(...data.map(d => d[pkName]));
 
           processed += batchRows.length;
           progressText.textContent = `${processed} / ${total}`;
           progressBar.style.width = `${(processed / total) * 100}%`;
         }
-
-        setStatus(`Upload selesai. ${processed} baris berhasil diinsert ke tabel "${tableName}".`, 'success');
+        setStatus(`Upload Sukses! ${processed} baris masuk.`, 'success');
       } catch (err) {
-        setStatus('Error saat upload: ' + err.message, 'error');
+        setStatus(`Error: ${err.message}. Memulai rollback...`, 'error');
+        if (insertedIds.length > 0) {
+          const { error: rbErr } = await supabaseClient.schema(TARGET_SCHEMA).from(tableName).delete().in(pkName, insertedIds);
+          setStatus(`Error: ${err.message}. Rollback ${rbErr ? 'Gagal' : 'Berhasil'}.`, 'error');
+        }
+        progressBar.style.background = 'red';
       }
     }
   </script>
 </body>
 </html>
-
